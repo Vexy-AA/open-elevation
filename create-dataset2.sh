@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OUTDIR="/code/data"
+OUTDIR="/code/data/elevation"
 if [ ! -e $OUTDIR ] ; then
     echo $OUTDIR does not exist!
 fi
