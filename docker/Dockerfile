@@ -10,8 +10,10 @@ RUN mkdir /code
 ADD . /code/
 
 WORKDIR /code
-CMD python3 server.py
+RUN chmod a+x start.sh
+CMD ["./start.sh"]
+#CMD python3 /code/data/config/server.py
 
 EXPOSE 8080
-
+EXPOSE 8000
 EXPOSE 8443
