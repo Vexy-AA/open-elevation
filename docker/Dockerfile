@@ -1,4 +1,4 @@
-FROM osgeo/gdal:ubuntu-small-latest-amd64
+FROM ghcr.io/osgeo/gdal:ubuntu-small-3.7.0
 
 RUN apt-get update
 RUN DEBIAN_FRONTEND=noninteractive apt-get install -y libspatialindex-dev unar bc python3-pip wget libgdal-dev gdal-bin
