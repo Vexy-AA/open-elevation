@@ -1,3 +1,4 @@
+import math
 import os
 from osgeo import gdal, osr
 from lazy import lazy
@@ -40,6 +41,8 @@ class GDALInterface(object):
         # coordinate transformation
         self.coordinate_transform = osr.CoordinateTransformation(spatial_reference, spatial_reference_raster)
         gt = self.geo_transform = self.src.GetGeoTransform()
+        self.nodata = self.src.GetRasterBand(1).GetNoDataValue()
+        self.res = abs(gt[1])
         dev = (gt[1] * gt[5] - gt[2] * gt[4])
         self.geo_transform_inv = (gt[0], gt[5] / dev, -gt[2] / dev,
                                   gt[3], -gt[4] / dev, gt[1] / dev)
@@ -56,6 +59,7 @@ class GDALInterface(object):
 
 
     def lookup(self, lat, lon):
+        """Height at lat/lon, or None when the point is outside this file or on a no-data pixel."""
         try:
 
             # get coordinate of the raster
@@ -64,17 +68,21 @@ class GDALInterface(object):
             # convert it to pixel/line on band
             u = xgeo - self.geo_transform_inv[0]
             v = ygeo - self.geo_transform_inv[3]
-            # FIXME this int() is probably bad idea, there should be half cell size thing needed
-            xpix = int(self.geo_transform_inv[1] * u + self.geo_transform_inv[2] * v)
-            ylin = int(self.geo_transform_inv[4] * u + self.geo_transform_inv[5] * v)
+            # floor, not int(): int() rounds -0.5 up to 0. Points outside the file are refused
+            # instead of letting a negative index wrap around to the other side of the array.
+            xpix = math.floor(self.geo_transform_inv[1] * u + self.geo_transform_inv[2] * v)
+            ylin = math.floor(self.geo_transform_inv[4] * u + self.geo_transform_inv[5] * v)
+            if not (0 <= xpix < self.src.RasterXSize and 0 <= ylin < self.src.RasterYSize):
+                return None
 
             # look the value up
             v = self.points_array[ylin, xpix]
-
-            return v if v != -32768 else self.SEA_LEVEL
+            if v != v or v == -32768 or (self.nodata is not None and v == self.nodata):
+                return None
+            return v
         except Exception as e:
             print(e)
-            return self.SEA_LEVEL
+            return None
 
     def close(self):
         self.src = None
@@ -137,6 +145,7 @@ class GDALTileInterface(object):
             all_coords += [
                 {
                     'file': full_path,
+                    'res': i.res,
                     'coords': ( lmin,  # latitude min
                                 lmax,  # latitude max
                                 lngmin,  # longitude min
@@ -161,15 +170,24 @@ class GDALTileInterface(object):
         self._build_index()
 
     def lookup(self, lat, lng):
-        nearest = list(self.index.nearest((lat, lng), 1, objects=True))
+        """Height from the pieces that contain the point.
 
-        if not nearest:
-            raise Exception('Invalid latitude/longitude')
-        else:
-            coords = nearest[0].object
-
-            gdal_interface = self._open_gdal_interface(coords['file'])
-            return int(gdal_interface.lookup(lat, lng))
+        Several pieces can contain a point (overlapping pieces, or a point on a shared
+        edge): they are tried finest resolution first, then by file name, and the first
+        one with data there answers. That makes overlaps deterministic and lets a piece
+        with a no-data hole fall through to the next one. A point inside no piece, or on
+        no-data in all of them, is sea level (0) - before, the nearest piece answered
+        with whatever pixel a wrapped-around index pointed at.
+        """
+        hits = list(self.index.intersection((lat, lng, lat, lng), objects=True))
+        if not hits:
+            return GDALInterface.SEA_LEVEL
+        hits.sort(key=lambda h: (h.object.get('res') or 0, h.object['file']))
+        for h in hits:
+            value = self._open_gdal_interface(h.object['file']).lookup(lat, lng)
+            if value is not None:
+                return int(value)
+        return GDALInterface.SEA_LEVEL
 
     def _build_index(self):
         print('Building spatial index ...')
